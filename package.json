@@ -1,0 +1,16 @@
+{
+  "name": "dhg-order-aggregation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node src/cli.js setup",
+    "run": "node src/cli.js run",
+    "close-cycle": "node src/cli.js close-cycle",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.3"
+  },
+  "engines": { "node": ">=20" }
+}
