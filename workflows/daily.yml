@@ -1,0 +1,39 @@
+name: Daily order aggregation
+
+# 6:00 am Eastern is 10:00 UTC during daylight time and 11:00 UTC during
+# standard time. Both crons are scheduled; the script works out the correct
+# 6:00 am ET boundary itself and is idempotent, so the "wrong" one is a harmless no-op.
+on:
+  schedule:
+    - cron: '5 10 * * *'
+    - cron: '5 11 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (print what would change, write nothing)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: order-aggregation   # never overlap with close-cycle
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Aggregate
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_SA_EMAIL: ${{ secrets.GOOGLE_SA_EMAIL }}
+          GOOGLE_SA_PRIVATE_KEY: ${{ secrets.GOOGLE_SA_PRIVATE_KEY }}
+          SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+        run: node src/cli.js run ${{ inputs.dry_run && '--dry-run' || '' }}
