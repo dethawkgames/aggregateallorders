@@ -1,0 +1,5 @@
+node_modules/
+.env
+*.json.key
+dhg-automation-*.json
+.DS_Store
