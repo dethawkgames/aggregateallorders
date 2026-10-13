@@ -1,5 +1,5 @@
 // Pure logic: no network, no sheet access. Everything here is unit-tested.
-import { SUPPLIER_TAGS, TABS, EMAIL_LIFECYCLE_TAGS, INVENTORY_QUEUED_TAG, SUPPLIER_ORDER_TAG, TAGGING_FLOOR_DATE } from './config.js';
+import { SUPPLIER_TAGS, TABS, SUPPLIERS, EMAIL_LIFECYCLE_TAGS, INVENTORY_QUEUED_TAG, SUPPLIER_ORDER_TAG, TAGGING_FLOOR_DATE } from './config.js';
 import { etDateString } from './time.js';
 
 export function supplierForTags(tags) {
@@ -244,4 +244,149 @@ export function orderLines(ledger, tabRows, lastOrder, { lockDate }) {
     out.push([lockDate, lastOrder, e.order, e.supplier, e.sku, e.qty, ordered, 0, 0]);
   }
   return out;
+}
+
+// ── Moving units to ACDD before locking (to reach ACDD's minimum order value) ──────────
+//
+// Two ways, both resolved at close-cycle, never while the cycle is collecting:
+//  1. Type a number (or "all") in the "Move to ACDD" column on an Asmodee / Universal Dist row.
+//  2. Move rows between the tabs by hand. Any SKU short on one supplier's tab while another
+//     supplier's tab holds the surplus is treated as a move (reported as "reconciled").
+// Either way the ledger lines are reassigned oldest order first, so tagging and the
+// per-order lines (which supplier each unit was actually ordered from) stay correct.
+
+export const MOVE_FROM = ['Asmodee', 'Universal Dist'];
+
+export function parseMove(raw, qty) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  if (/^all$/i.test(s)) return qty > 0 ? { units: qty } : { error: 'row quantity is 0' };
+  if (/^\d+$/.test(s)) {
+    const n = parseInt(s, 10);
+    if (n === 0) return null;
+    if (qty <= 0) return { error: 'row quantity is 0' };
+    return { units: Math.min(n, qty), clamped: n > qty };
+  }
+  return { error: `"${s}" is not a whole number or "all"` };
+}
+
+export function moveRequests(tabRows) {
+  const out = [];
+  for (const supplier of MOVE_FROM) {
+    const t = TABS[supplier];
+    (tabRows[supplier] || []).forEach((r, index) => {
+      const sku = String(r[t.skuCol] ?? '').trim();
+      const qty = Number(r[t.qtyCol]) || 0;
+      const m = parseMove(r[t.moveCol], qty);
+      if (!m) return;
+      out.push({ supplier, index, sku, qty, ...(sku ? m : { error: 'row has no SKU' }) });
+    });
+  }
+  return out;
+}
+
+const cloneLedger = ledger => new Map([...ledger].map(([k, v]) => [k, { ...v }]));
+
+// Move `units` of ledger quantity for `sku` from one supplier to another, oldest order first.
+function reassignLedger(led, sku, from, to, units) {
+  const entries = [...led.values()]
+    .filter(e => e.supplier === from && e.sku === sku && e.qty > 0)
+    .sort((a, b) => orderNumber(a.order) - orderNumber(b.order));
+  let left = units, done = 0;
+  for (const e of entries) {
+    if (left <= 0) break;
+    const take = Math.min(e.qty, left);
+    e.qty -= take; left -= take; done += take;
+    if (e.qty <= 0) led.delete(lineKey(e.order, e.sku, e.supplier));
+    const k = lineKey(e.order, sku, to);
+    const dest = led.get(k);
+    if (dest) dest.qty += take; else led.set(k, { order: e.order, sku, supplier: to, qty: take, title: e.title });
+  }
+  return done;
+}
+
+function qtyMaps(rows, led) {
+  const sheet = new Map(), counted = new Map();
+  for (const supplier of SUPPLIERS) {
+    const t = TABS[supplier];
+    for (const r of rows[supplier]) {
+      if (!r) continue;
+      const sku = String(r[t.skuCol] ?? '').trim();
+      if (!sku) continue;
+      const k = `${supplier}|${sku}`;
+      sheet.set(k, (sheet.get(k) || 0) + (Number(r[t.qtyCol]) || 0));
+    }
+  }
+  for (const e of led.values()) {
+    if (e.qty <= 0) continue;
+    const k = `${e.supplier}|${e.sku}`;
+    counted.set(k, (counted.get(k) || 0) + e.qty);
+  }
+  return { sheet, counted };
+}
+
+// Returns the effective ledger + tab rows to lock, plus a report. Inputs are not mutated.
+// acddMap: Shopify SKU -> ACDD SKU, needed only to create ACDD rows that do not exist yet.
+export function applyMoves(ledger, tabRows, { acddMap = new Map() } = {}) {
+  const led = cloneLedger(ledger);
+  const rows = {};
+  for (const s of SUPPLIERS) rows[s] = (tabRows[s] || []).map(r => r.slice());
+  const moves = [], skipped = [];
+  const touched = new Set();
+  const A = TABS.ACDD;
+  const findAcdd = sku => rows.ACDD.find(r => r && String(r[A.skuCol] ?? '').trim() === sku);
+
+  for (const req of moveRequests(rows)) {
+    const { supplier, index, sku } = req;
+    const t = TABS[supplier];
+    const row = rows[supplier][index];
+    const title = String(row[t.titleCol] ?? '');
+    if (req.error) { skipped.push({ supplier, sku, reason: req.error }); continue; }
+    let dest = findAcdd(sku);
+    const acddSku = String((dest && dest[0]) || acddMap.get(sku) || '').trim();
+    if (!acddSku) {
+      skipped.push({ supplier, sku, units: req.units, reason: 'no ACDD SKU found for this product, so it was left on ' + supplier });
+      continue;
+    }
+    if (dest) { if (!String(dest[0] ?? '').trim()) dest[0] = acddSku; dest[A.qtyCol] = (Number(dest[A.qtyCol]) || 0) + req.units; }
+    else { dest = buildRow('ACDD', { sku, qty: req.units, title, orders: '', acddSku }); dest[A.binsCol] = String(row[t.binsCol] ?? ''); rows.ACDD.push(dest); }
+    const left = req.qty - req.units;
+    row[t.moveCol] = '';
+    if (left > 0) row[t.qtyCol] = left; else rows[supplier][index] = null;
+    reassignLedger(led, sku, supplier, 'ACDD', req.units);
+    touched.add(`${supplier}|${sku}`); touched.add(`ACDD|${sku}`);
+    moves.push({ sku, from: supplier, to: 'ACDD', units: req.units, reason: 'Move to ACDD column', ...(req.clamped ? { note: 'asked for more than the row had; moved the whole row' } : {}) });
+  }
+
+  // Hand moves: a SKU short on one tab with the surplus sitting on another tab.
+  const { sheet, counted } = qtyMaps(rows, led);
+  const skus = new Set([...led.values()].filter(e => e.qty > 0).map(e => e.sku));
+  for (const sku of [...skus].sort()) {
+    for (const from of SUPPLIERS) {
+      let short = (counted.get(`${from}|${sku}`) || 0) - (sheet.get(`${from}|${sku}`) || 0);
+      for (const to of SUPPLIERS) {
+        if (short <= 0) break;
+        if (to === from) continue;
+        const surplus = (sheet.get(`${to}|${sku}`) || 0) - (counted.get(`${to}|${sku}`) || 0);
+        if (surplus <= 0) continue;
+        const units = reassignLedger(led, sku, from, to, Math.min(short, surplus));
+        if (!units) continue;
+        counted.set(`${from}|${sku}`, counted.get(`${from}|${sku}`) - units);
+        counted.set(`${to}|${sku}`, (counted.get(`${to}|${sku}`) || 0) + units);
+        short -= units;
+        touched.add(`${from}|${sku}`); touched.add(`${to}|${sku}`);
+        moves.push({ sku, from, to, units, reason: 'reconciled (rows moved between tabs by hand)' });
+      }
+    }
+  }
+
+  for (const s of SUPPLIERS) rows[s] = rows[s].filter(Boolean);
+  // Refresh Order Names on every row whose assignment changed.
+  const names = orderNamesBySku(led);
+  for (const k of touched) {
+    const [supplier, sku] = k.split('|');
+    const t = TABS[supplier];
+    for (const r of rows[supplier]) if (String(r[t.skuCol] ?? '').trim() === sku) r[t.ordersCol] = names.get(k) ?? '';
+  }
+  return { ledger: led, tabRows: rows, moves, skipped };
 }

@@ -25,10 +25,10 @@ async function main() {
     const r = await runAggregation(deps(), { dryRun: flags.has('--dry-run'), useNow: flags.has('--now'), force: flags.has('--force') });
     console.log(JSON.stringify(r, null, 2));
   } else if (cmd === 'close-cycle') {
-    const r = await closeCycle(deps(), positional[0], { runNow: flags.has('--run-now'), skipTagging: flags.has('--no-tag') });
+    const r = await closeCycle(deps(), positional[0], { runNow: flags.has('--run-now'), skipTagging: flags.has('--no-tag'), dryRun: flags.has('--dry-run') });
     console.log(JSON.stringify(r, null, 2));
   } else {
-    console.error('Usage:\n  setup <last submitted order>\n  run [--dry-run] [--now] [--force]\n  close-cycle <last submitted order> [--run-now] [--no-tag]');
+    console.error('Usage:\n  setup <last submitted order>\n  run [--dry-run] [--now] [--force]\n  close-cycle <last submitted order> [--run-now] [--no-tag] [--dry-run]');
     process.exit(2);
   }
 }

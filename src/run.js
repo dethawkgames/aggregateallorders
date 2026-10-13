@@ -4,7 +4,7 @@ import { TABS, SUPPLIERS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, LI
 import { cutoffsBetween, etDateString, etWeekday } from './time.js';
 import {
   desiredFromOrders, diffLedger, orderNamesBySku, buildRow, planTabChanges,
-  binText, binLookupBySku, orderNumber, archiveRows, ordersToTag, planOrderTag, orderLines,
+  binText, binLookupBySku, orderNumber, archiveRows, ordersToTag, planOrderTag, orderLines, applyMoves, moveRequests,
 } from './logic.js';
 
 export async function readConfig(store) {
@@ -172,7 +172,7 @@ export async function applyOrderTags(shopify, names, log = () => {}) {
 }
 
 export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
-  const { store, shopify, now = new Date() } = deps;
+  const { store, shopify, loadAcddMap, now = new Date() } = deps;
   const n = parseInt(lastSubmittedOrder, 10);
   if (!n) throw new Error('Pass the last submitted order number, e.g. 5990');
   const createdAt = await shopify.getOrderCreatedAt(n); // throws if the order does not exist
@@ -187,16 +187,36 @@ export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
         `${SUPPLIER_ORDER_TAG}. Nothing was changed. Add write_orders (and approve it on the store), or run with --no-tag.`);
     }
   }
-  const ledger = readLedger(await store.readTab(LEDGER_TAB));
-  const tabRows = {};
-  for (const supplier of SUPPLIERS) tabRows[supplier] = (await store.readTab(supplier)).slice(1);
+  const rawLedger = readLedger(await store.readTab(LEDGER_TAB));
+  const rawRows = {};
+  for (const supplier of SUPPLIERS) rawRows[supplier] = (await store.readTab(supplier)).slice(1);
+
+  // Units you moved to ACDD (Move to ACDD column, or rows moved by hand) are applied here, in
+  // memory, so the live tabs stay untouched until everything below has been verified.
+  const moveSkus = moveRequests(rawRows).filter(r => !r.error).map(r => r.sku);
+  let acddMap = new Map();
+  if (moveSkus.length && loadAcddMap) {
+    acddMap = await loadAcddMap(moveSkus, shopify).catch(e => { deps.log?.(`ACDD SKU map unavailable: ${e.message}`); return new Map(); });
+  }
+  const moved = applyMoves(rawLedger, rawRows, { acddMap });
+  const ledger = moved.ledger, tabRows = moved.tabRows;
   const plan = ordersToTag(ledger, tabRows, n);
+
+  const meta = { lockDate: etDateString(now), lastOrder: n };
+  const archived = [];
+  for (const supplier of SUPPLIERS) archived.push(...archiveRows(supplier, tabRows[supplier], meta));
+  const lines = orderLines(ledger, tabRows, n, meta);
+
+  if (opts.dryRun) {
+    return {
+      dryRun: true, lastSubmittedOrder: n, wouldCopyToOrderPlaced: archived.length, wouldRecordOrderLines: lines.length,
+      movedToAcdd: moved.moves, moveSkipped: moved.skipped,
+      wouldTag: tagging ? plan.tag : 'tagging disabled (--no-tag)', heldBackBecauseSheetWasReducedByHand: plan.held,
+    };
+  }
 
   // Copy what was ordered into "Order placed" BEFORE anything is cleared. If the
   // copy fails or cannot be verified, we stop here and every tab is left as it was.
-  const meta = { lockDate: etDateString(now), lastOrder: n };
-  const archived = [];
-  for (const supplier of SUPPLIERS) archived.push(...archiveRows(supplier, (await store.readTab(supplier)).slice(1), meta));
   if (archived.length) {
     const before = (await store.readTab(ARCHIVE_TAB)).length;
     await store.appendRows(ARCHIVE_TAB, archived);
@@ -208,7 +228,6 @@ export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
 
   // Per-order lines for the tracker app (which orders each unit belongs to). Same rule:
   // verified before anything is cleared.
-  const lines = orderLines(ledger, tabRows, n, meta);
   if (lines.length) {
     const before = (await store.readTab(LINES_TAB)).length;
     await store.appendRows(LINES_TAB, lines);
@@ -234,7 +253,7 @@ export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
     [K.override]: '',
     [K.lastRun]: now.toISOString(),
   });
-  const result = { closed: true, lastSubmittedOrder: n, lastSubmittedOrderCreatedAt: createdAt, rowsCopiedToOrderPlaced: archived.length, orderLinesRecorded: lines.length };
+  const result = { closed: true, lastSubmittedOrder: n, lastSubmittedOrderCreatedAt: createdAt, rowsCopiedToOrderPlaced: archived.length, orderLinesRecorded: lines.length, movedToAcdd: moved.moves, moveSkipped: moved.skipped };
   result.tagging = tagging
     ? { tag: SUPPLIER_ORDER_TAG, tagged: tagResult.tagged, skipped: tagResult.skipped, errors: tagResult.errors, heldBackBecauseSheetWasReducedByHand: plan.held }
     : { skipped: 'tagging disabled (--no-tag)' };

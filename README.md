@@ -45,6 +45,25 @@ Tagging happens after the verified copy to Order placed; a per-order failure is
 reported but never blocks closing. Needs the `write_orders` scope; if missing,
 close-cycle stops before changing anything. `--no-tag` closes without tagging.
 
+## Moving items to ACDD before you lock (to reach ACDD's minimum)
+
+On the **Asmodee** and **Universal Dist** tabs there is a **Move to ACDD** column at the end.
+Type a number of units (or `all`) on a row. Nothing changes while you are collecting; at
+close-cycle the move is applied: the source row is reduced (removed at 0), the ACDD row is
+created or incremented (ACDD SKU looked up the usual way), and the affected orders' ledger
+lines are reassigned oldest order first. Orders stay taggable and **Order Lines** records ACDD
+as the supplier, so the tracker expects those units on the ACDD invoice. A move is skipped (and
+listed as `moveSkipped`) if no ACDD SKU can be found or the cell is not a number. A number
+larger than the row moves the whole row.
+
+If you move rows between tabs by hand instead, close-cycle notices a SKU that is short on one tab
+with the surplus on another and treats it as a move (reported as `reconciled`). Fill the ACDD tab's
+**Shopify SKU** column when you do, since rows without one are ignored.
+
+Preview before locking: `node src/cli.js close-cycle <last order> --dry-run` (or the workflow's
+`dry_run` input) prints the moves, what would be tagged and held, and changes nothing.
+Existing sheets need `node src/cli.js setup <last order>` once to add the new header.
+
 ## Sheet layout
 
 | Tab | Columns |
@@ -82,7 +101,7 @@ Local use: `GOOGLE_SA_KEY_FILE=/path/to/key.json` can replace the two Google var
 ```
 node src/cli.js setup <last submitted order>
 node src/cli.js run [--dry-run] [--now] [--force]
-node src/cli.js close-cycle <last submitted order> [--run-now] [--no-tag]
+node src/cli.js close-cycle <last submitted order> [--run-now] [--no-tag] [--dry-run]
 npm test
 ```
 

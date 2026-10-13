@@ -179,3 +179,61 @@ test('closeCycle rejects an order number Shopify does not know, before clearing 
   await assert.rejects(() => closeCycle(deps(at('10-06', '08:00')), 99999), /not found/);
   assert.equal(JSON.stringify(store.tabs), before);
 });
+
+test('close-cycle copies every row (including hand-added ones) to "Order placed" before clearing; appends, never overwrites', async () => {
+  const orders = [
+    mk(700, et('10-12', '10:00'), [line('A1', 1, tags.A)]),
+    mk(701, et('10-13', '03:00'), [line('A1', 2, tags.A, 'Alpha'), line('B1', 1, tags.B, 'Beta'), line('C1', 3, tags.C, 'Gamma')]),
+    mk(702, et('10-19', '03:00'), [line('A1', 1, tags.A, 'Alpha')]),
+  ];
+  const { store, deps } = setup({ orders, lastOrder: 700, lastCutoff: at('10-12', '15:00') });
+  await runAggregation(deps(at('10-13', '07:00')));
+  store.tabs.Asmodee.push(['HAND1', 4, 'Case', '', 'Hand added', '', '']);               // you add a row by hand
+  const res = await closeCycle(deps(at('10-13', '15:00')), 701);
+  assert.equal(res.rowsCopiedToOrderPlaced, 4);
+  const op = store.body('Order placed');
+  assert.equal(op.length, 4);
+  const a1 = op.find(r => r[3] === 'A1');
+  assert.deepEqual(a1.slice(0, 3), ['2026-10-13', 701, 'Asmodee']);
+  assert.equal(a1[5], 2);
+  assert.equal(a1[6], 'Each');
+  assert.equal(a1[8], '#701');
+  assert.equal(op.find(r => r[3] === 'HAND1')[6], 'Case');                                // unit preserved
+  const c1 = op.find(r => r[3] === 'C1');
+  assert.equal(c1[2], 'ACDD'); assert.equal(c1[4], 'ACDD-C1'); assert.equal(c1[5], 3);
+  assert.equal(store.body('Asmodee').length, 0);                                           // working tabs cleared afterwards
+
+  // Next cycle: a second lock appends below the first; the first block is untouched
+  await runAggregation(deps(at('10-19', '07:00')), {});
+  const res2 = await closeCycle(deps(at('10-19', '15:00')), 702);
+  assert.equal(res2.rowsCopiedToOrderPlaced, 1);
+  const op2 = store.body('Order placed');
+  assert.equal(op2.length, 5);
+  assert.deepEqual(op2.slice(0, 4), op);
+  assert.deepEqual(op2[4].slice(0, 4), ['2026-10-19', 702, 'Asmodee', 'A1']);
+
+  // Closing again with nothing on the sheets copies nothing and does not duplicate
+  const res3 = await closeCycle(deps(at('10-19', '16:00')), 702);
+  assert.equal(res3.rowsCopiedToOrderPlaced, 0);
+  assert.equal(store.body('Order placed').length, 5);
+});
+
+test('if the copy to "Order placed" fails, nothing is cleared and the cycle stays open', async () => {
+  const orders = [
+    mk(800, et('10-12', '10:00'), [line('A1', 1, tags.A)]),
+    mk(801, et('10-13', '03:00'), [line('A1', 2, tags.A)]),
+  ];
+  const { store, deps } = setup({ orders, lastOrder: 800, lastCutoff: at('10-12', '15:00') });
+  await runAggregation(deps(at('10-13', '07:00')));
+  const before = JSON.stringify(store.tabs);
+  const realAppend = store.appendRows.bind(store);
+  store.appendRows = async (tab, rows) => { if (tab === 'Order placed') throw new Error('Sheets down'); return realAppend(tab, rows); };
+  await assert.rejects(() => closeCycle(deps(at('10-13', '15:00')), 801), /Sheets down/);
+  assert.equal(JSON.stringify(store.tabs), before);
+  assert.equal(store.cfg(K.lastOrder), 800);
+
+  // A copy that silently drops rows is caught too
+  store.appendRows = async (tab, rows) => { if (tab === 'Order placed') return; return realAppend(tab, rows); };
+  await assert.rejects(() => closeCycle(deps(at('10-13', '15:00')), 801), /could not be verified/);
+  assert.equal(JSON.stringify(store.tabs), before);
+});

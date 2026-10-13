@@ -8,12 +8,12 @@ export const CUTOFF_HOUR = 6; // 6:00 am ET: every daily run, and submission day
 // UnitOfMeasureId, VariantId); everything after that is for you.
 export const TABS = {
   Asmodee: {
-    header: ['ProductId', 'Quantity', 'UnitOfMeasureId', 'VariantId', 'Title', 'Order Names', 'In Bins'],
-    skuCol: 0, qtyCol: 1, unitCol: 2, titleCol: 4, ordersCol: 5, binsCol: 6,
+    header: ['ProductId', 'Quantity', 'UnitOfMeasureId', 'VariantId', 'Title', 'Order Names', 'In Bins', 'Move to ACDD'],
+    skuCol: 0, qtyCol: 1, unitCol: 2, titleCol: 4, ordersCol: 5, binsCol: 6, moveCol: 7,
   },
   'Universal Dist': {
-    header: ['SKU', 'Quantity', 'Title', 'Order Names', 'In Bins'],
-    skuCol: 0, qtyCol: 1, titleCol: 2, ordersCol: 3, binsCol: 4,
+    header: ['SKU', 'Quantity', 'Title', 'Order Names', 'In Bins', 'Move to ACDD'],
+    skuCol: 0, qtyCol: 1, titleCol: 2, ordersCol: 3, binsCol: 4, moveCol: 5,
   },
   ACDD: {
     header: ['ACDD SKU', 'Shopify SKU', 'Quantity', 'Title', 'Order Names', 'In Bins'],
