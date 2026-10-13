@@ -37,7 +37,17 @@ export const LEDGER_HEADER = ['Order', 'SKU', 'Supplier', 'Qty Counted', 'Title'
 // carries its own lock date and last submitted order, so the list stays
 // filterable and later clean-up logic (e.g. dropping fulfilled items) can work row by row.
 export const ARCHIVE_TAB = 'Order placed';
+export const SHIPPED_TAB = 'Shipped from supplier';
+export const RECEIVED_TAB = 'Order received';
+export const LINES_TAB = 'Order Lines';
+export const INVOICES_TAB = 'Processed Invoices';
 export const ARCHIVE_HEADER = ['Lock Date', 'Last Order Submitted', 'Supplier', 'SKU', 'ACDD SKU', 'Quantity', 'Unit', 'Title', 'Order Names', 'In Bins'];
+export const SHIPPED_HEADER = [...ARCHIVE_HEADER, 'Shipped On', 'Invoice'];
+export const RECEIVED_HEADER = [...SHIPPED_HEADER, 'Received On', 'Arrival Invoice'];
+// One row per (order, supplier, SKU) that was submitted. Written at close-cycle, then
+// advanced by the tracker app's invoice uploads. Ordered/Shipped/Received are unit counts.
+export const LINES_HEADER = ['Lock Date', 'Last Order Submitted', 'Order', 'Supplier', 'SKU', 'Qty', 'Ordered', 'Shipped', 'Received'];
+export const INVOICES_HEADER = ['Processed At', 'Stage', 'Supplier', 'File', 'SHA-256', 'Units Moved'];
 
 export const K = {
   lastOrder: 'Last Submitted Order',
@@ -50,7 +60,7 @@ export const K = {
 export const DEFAULTS = {
   shop: 'detective-hawk-games.myshopify.com',
   binTrackerUrl: 'https://dhg-bin-tracker-app.vercel.app',
-  productSkusSheetId: '1yC-oZ-0hD5ReTcOA9iTjTGC6mONbDUCpfbZZA9GrQtI', // read-only: ACDD SKU mapping lives on Sheet1
+  productSkusSheetId: '1yC-oZ-0hD5ReTcOA9iTjTGC6mONbDUCpfbZZA9GrQtI', // read-only: ACDD SKU mapping: 'Asmodee Only (Clean)' tab, plus Garland UPC lookup
   shopifyApiVersion: '2025-01',
 };
 

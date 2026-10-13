@@ -215,3 +215,33 @@ export function planOrderTag(info) {
   if (current === INVENTORY_QUEUED_TAG) return { action: 'skip', reason: 'inventory-queued (never downgraded)' };
   return { action: 'tag', remove: current || null };
 }
+
+// Per-order record of what was submitted, written at close-cycle so the tracker app
+// can tell which ORDERS an invoice's units belong to. `Ordered` is how many of the
+// order's units actually made it onto the sheet: the quantity left on a supplier tab
+// is shared out oldest order first, so a row you reduced by hand leaves the newest
+// orders under-ordered (they can then never be marked fully shipped).
+export function orderLines(ledger, tabRows, lastOrder, { lockDate }) {
+  const sheetQty = new Map();
+  for (const supplier of Object.keys(TABS)) {
+    const t = TABS[supplier];
+    for (const r of tabRows[supplier] || []) {
+      const sku = String(r[t.skuCol] ?? '').trim();
+      if (!sku) continue;
+      const k = `${supplier}|${sku}`;
+      sheetQty.set(k, (sheetQty.get(k) || 0) + (Number(r[t.qtyCol]) || 0));
+    }
+  }
+  const entries = [...ledger.values()]
+    .filter(e => e.qty > 0 && orderNumber(e.order) <= lastOrder)
+    .sort((a, b) => orderNumber(a.order) - orderNumber(b.order) || a.sku.localeCompare(b.sku));
+  const out = [];
+  for (const e of entries) {
+    const k = `${e.supplier}|${e.sku}`;
+    const left = sheetQty.get(k) || 0;
+    const ordered = Math.min(e.qty, left);
+    sheetQty.set(k, left - ordered);
+    out.push([lockDate, lastOrder, e.order, e.supplier, e.sku, e.qty, ordered, 0, 0]);
+  }
+  return out;
+}

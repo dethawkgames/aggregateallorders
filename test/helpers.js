@@ -1,4 +1,4 @@
-import { TABS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, ARCHIVE_HEADER, K } from '../src/config.js';
+import { TABS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, ARCHIVE_HEADER, SHIPPED_TAB, SHIPPED_HEADER, RECEIVED_TAB, RECEIVED_HEADER, LINES_TAB, LINES_HEADER, INVOICES_TAB, INVOICES_HEADER, K } from '../src/config.js';
 
 // In-memory stand-in for GoogleStore with identical semantics.
 export class MemoryStore {
@@ -7,6 +7,10 @@ export class MemoryStore {
     for (const [t, v] of Object.entries(TABS)) this.tabs[t] = [v.header.slice()];
     this.tabs[LEDGER_TAB] = [LEDGER_HEADER.slice()];
     this.tabs[ARCHIVE_TAB] = [ARCHIVE_HEADER.slice()];
+    this.tabs[SHIPPED_TAB] = [SHIPPED_HEADER.slice()];
+    this.tabs[RECEIVED_TAB] = [RECEIVED_HEADER.slice()];
+    this.tabs[LINES_TAB] = [LINES_HEADER.slice()];
+    this.tabs[INVOICES_TAB] = [INVOICES_HEADER.slice()];
     this.tabs[CONFIG_TAB] = [['Setting', 'Value']];
   }
   async readTab(t) { return this.tabs[t].map(r => r.slice()); }

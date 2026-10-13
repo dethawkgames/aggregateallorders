@@ -54,10 +54,17 @@ close-cycle stops before changing anything. `--no-tag` closes without tagging.
 | ACDD | ACDD SKU, Shopify SKU, Quantity, Title, Order Names, In Bins |
 | Config | Last Submitted Order, Cycle Status, Last Cutoff Processed, Submission Day Override, Last Run |
 | Ledger | what each order line has contributed (script-owned; do not edit) |
+| Shipped from supplier / Order received | where the tracker app moves units as invoices are uploaded (see the Weekly Orders Tracker) |
+| Order Lines | one row per submitted order + SKU (Qty, Ordered, Shipped, Received) written at close-cycle; lets the tracker tag orders |
+| Processed Invoices | audit + duplicate guard for tracker uploads |
 | Order placed | permanent, append-only record of each locked cycle: Lock Date, Last Order Submitted, Supplier, SKU, ACDD SKU, Quantity, Unit, Title, Order Names, In Bins. Newest cycle at the bottom; every row carries its own lock date and last order, so it can be filtered or cleaned up per row |
 
 **In Bins** is refreshed on every run from the bin tracker (`bin(qty)`), for every
 row including ones you add by hand. It is advisory only.
+
+ACDD SKUs on the ACDD tab come from the Product SKUs sheet's `Asmodee Only (Clean)` tab, then
+from the product's Shopify barcode matched to the ACDD catalog (`Garland` tab, UPC → ItemID).
+(`Sheet1` no longer has an `ACDD SKU` column.)
 
 ## Setup (one time)
 

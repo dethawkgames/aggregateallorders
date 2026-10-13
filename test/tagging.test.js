@@ -85,3 +85,23 @@ test('a tagging failure on one order is reported but does not stop the close', a
   assert.equal(store.body('Asmodee').length, 0);
   assert.equal(store.cfg('Last Submitted Order'), 702);
 });
+
+test('close-cycle records per-order lines; Ordered is shared out oldest-first when a row was reduced by hand', async () => {
+  const orders = [
+    mk(700, et('10-12', '10:00'), [line('A1', 1, tags.A)]),
+    mk(701, et('10-13', '03:00'), [line('A1', 2, tags.A), line('B1', 1, tags.B)]),
+    mk(702, et('10-13', '04:00'), [line('A1', 3, tags.A)]),
+  ];
+  const { store, deps } = setup(orders);
+  await runAggregation(deps(at('10-13', '07:00')));
+  store.tabs.Asmodee[1][1] = 4;            // 5 needed (2+3), you only ordered 4
+  const res = await closeCycle(deps(at('10-13', '15:00')), 702);
+  assert.equal(res.orderLinesRecorded, 3);
+  const lines = store.body('Order Lines');
+  const a701 = lines.find(r => r[2] === '#701' && r[4] === 'A1');
+  const a702 = lines.find(r => r[2] === '#702' && r[4] === 'A1');
+  assert.deepEqual([a701[5], a701[6], a701[7], a701[8]], [2, 2, 0, 0]);
+  assert.deepEqual([a702[5], a702[6]], [3, 2]);                  // short by one
+  assert.equal(lines.find(r => r[4] === 'B1')[3], 'Universal Dist');
+  assert.equal(lines[0][0], '2026-10-13'); assert.equal(lines[0][1], 702);
+});

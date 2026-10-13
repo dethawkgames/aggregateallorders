@@ -84,6 +84,18 @@ export class Shopify {
     return out;
   }
 
+  // SKU -> variant barcode (UPC), used to find the ACDD item for a Shopify SKU.
+  async barcodesForSkus(skus) {
+    const out = new Map();
+    const list = [...new Set(skus.filter(Boolean))];
+    for (let i = 0; i < list.length; i += 40) {
+      const q = list.slice(i, i + 40).map(s => `sku:"${String(s).replace(/["\\]/g, '')}"`).join(' OR ');
+      const d = await this.gql(`query($q: String!) { productVariants(first: 100, query: $q) { edges { node { sku barcode } } } }`, { q });
+      for (const { node } of d.productVariants.edges) if (node.sku && node.barcode) out.set(node.sku, String(node.barcode).trim());
+    }
+    return out;
+  }
+
   async accessScopes() {
     const d = await this.gql(`query { currentAppInstallation { accessScopes { handle } } }`);
     return d.currentAppInstallation.accessScopes.map(x => x.handle);

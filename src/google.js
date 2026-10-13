@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import fs from 'node:fs';
-import { CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, TABS, K } from './config.js';
+import { CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, ARCHIVE_HEADER, SHIPPED_TAB, SHIPPED_HEADER, RECEIVED_TAB, RECEIVED_HEADER, LINES_TAB, LINES_HEADER, INVOICES_TAB, INVOICES_HEADER, TABS, K } from './config.js';
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
@@ -108,12 +108,12 @@ export class GoogleStore {
   async setup({ lastOrder, now = new Date() }) {
     const meta = await call(this.auth, 'GET', `${API}/${this.id}?fields=sheets.properties(sheetId,title)`);
     const have = new Set(meta.sheets.map(s => s.properties.title));
-    const want = [...Object.keys(TABS), CONFIG_TAB, LEDGER_TAB];
+    const want = [...Object.keys(TABS), CONFIG_TAB, LEDGER_TAB, ARCHIVE_TAB, SHIPPED_TAB, RECEIVED_TAB, LINES_TAB, INVOICES_TAB];
     const requests = want.filter(t => !have.has(t)).map(title => ({ addSheet: { properties: { title, gridProperties: { frozenRowCount: 1 } } } }));
     if (requests.length) await call(this.auth, 'POST', `${API}/${this.id}:batchUpdate`, { requests });
     this.sheetIds = null;
 
-    const headers = { ...Object.fromEntries(Object.entries(TABS).map(([k, v]) => [k, v.header])), [LEDGER_TAB]: LEDGER_HEADER, [CONFIG_TAB]: ['Setting', 'Value'] };
+    const headers = { ...Object.fromEntries(Object.entries(TABS).map(([k, v]) => [k, v.header])), [LEDGER_TAB]: LEDGER_HEADER, [ARCHIVE_TAB]: ARCHIVE_HEADER, [SHIPPED_TAB]: SHIPPED_HEADER, [RECEIVED_TAB]: RECEIVED_HEADER, [LINES_TAB]: LINES_HEADER, [INVOICES_TAB]: INVOICES_HEADER, [CONFIG_TAB]: ['Setting', 'Value'] };
     for (const [tab, header] of Object.entries(headers)) {
       await call(this.auth, 'PUT', `${API}/${this.id}/values/${encodeURIComponent(`'${tab}'!A1`)}?valueInputOption=RAW`, { values: [header] });
     }

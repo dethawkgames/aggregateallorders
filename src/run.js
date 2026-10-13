@@ -1,10 +1,10 @@
 // One aggregation run. Dependencies are injected so the whole thing can be
 // tested against an in-memory sheet and fake Shopify.
-import { TABS, SUPPLIERS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, SUPPLIER_ORDER_TAG, K } from './config.js';
+import { TABS, SUPPLIERS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, LINES_TAB, SUPPLIER_ORDER_TAG, K } from './config.js';
 import { cutoffsBetween, etDateString, etWeekday } from './time.js';
 import {
   desiredFromOrders, diffLedger, orderNamesBySku, buildRow, planTabChanges,
-  binText, binLookupBySku, orderNumber, archiveRows, ordersToTag, planOrderTag,
+  binText, binLookupBySku, orderNumber, archiveRows, ordersToTag, planOrderTag, orderLines,
 } from './logic.js';
 
 export async function readConfig(store) {
@@ -103,7 +103,7 @@ export async function runAggregation(deps, opts = {}) {
     if (plan.updates.length) await store.updateCells(supplier, plan.updates);
     if (plan.deletes.length) await store.deleteRows(supplier, plan.deletes);
     if (plan.appends.length) {
-      if (supplier === 'ACDD' && !acddMap) acddMap = await loadAcddMap().catch(e => { log(`ACDD SKU map unavailable: ${e.message}`); return new Map(); });
+      if (supplier === 'ACDD' && !acddMap) acddMap = await loadAcddMap(plan.appends.map(a => a.sku), shopify).catch(e => { log(`ACDD SKU map unavailable: ${e.message}`); return new Map(); });
       await store.appendRows(supplier, plan.appends.map(a => buildRow(supplier, { ...a, acddSku: acddMap?.get(a.sku) || '' })));
     }
   }
@@ -206,6 +206,18 @@ export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
     }
   }
 
+  // Per-order lines for the tracker app (which orders each unit belongs to). Same rule:
+  // verified before anything is cleared.
+  const lines = orderLines(ledger, tabRows, n, meta);
+  if (lines.length) {
+    const before = (await store.readTab(LINES_TAB)).length;
+    await store.appendRows(LINES_TAB, lines);
+    const after = (await store.readTab(LINES_TAB)).length;
+    if (after - before !== lines.length) {
+      throw new Error(`"${LINES_TAB}" write could not be verified (expected +${lines.length} rows, saw +${after - before}). The Order placed copy was already made; nothing was cleared.`);
+    }
+  }
+
   // Tag now that the order record is safely copied. Failures here are reported, never fatal.
   let tagResult = { skipped: [], tagged: [], errors: [] };
   if (tagging) {
@@ -222,7 +234,7 @@ export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
     [K.override]: '',
     [K.lastRun]: now.toISOString(),
   });
-  const result = { closed: true, lastSubmittedOrder: n, lastSubmittedOrderCreatedAt: createdAt, rowsCopiedToOrderPlaced: archived.length };
+  const result = { closed: true, lastSubmittedOrder: n, lastSubmittedOrderCreatedAt: createdAt, rowsCopiedToOrderPlaced: archived.length, orderLinesRecorded: lines.length };
   result.tagging = tagging
     ? { tag: SUPPLIER_ORDER_TAG, tagged: tagResult.tagged, skipped: tagResult.skipped, errors: tagResult.errors, heldBackBecauseSheetWasReducedByHand: plan.held }
     : { skipped: 'tagging disabled (--no-tag)' };
