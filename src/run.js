@@ -1,10 +1,10 @@
 // One aggregation run. Dependencies are injected so the whole thing can be
 // tested against an in-memory sheet and fake Shopify.
-import { TABS, SUPPLIERS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, K } from './config.js';
+import { TABS, SUPPLIERS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, SUPPLIER_ORDER_TAG, K } from './config.js';
 import { cutoffsBetween, etDateString, etWeekday } from './time.js';
 import {
   desiredFromOrders, diffLedger, orderNamesBySku, buildRow, planTabChanges,
-  binText, binLookupBySku, orderNumber,
+  binText, binLookupBySku, orderNumber, archiveRows, ordersToTag, planOrderTag,
 } from './logic.js';
 
 export async function readConfig(store) {
@@ -27,7 +27,7 @@ export async function writeConfig(store, values) {
   if (appends.length) await store.appendRows(CONFIG_TAB, appends);
 }
 
-function readLedger(rows) {
+export function readLedger(rows) {
   const ledger = new Map();
   for (const r of rows.slice(1)) {
     if (!r[0] || !r[1]) continue;
@@ -146,11 +146,73 @@ export async function runAggregation(deps, opts = {}) {
   return summary;
 }
 
+// Apply the dhg-status-order-supplier tag the way the old Lock & Order did:
+// remove the order's current fulfillment-stage tag (never the email-lifecycle
+// ones), then add the new one. Per-order problems are collected, not thrown.
+export async function applyOrderTags(shopify, names, log = () => {}) {
+  const result = { tagged: [], skipped: [], errors: [] };
+  if (!names.length) return result;
+  const infos = await shopify.getOrdersForTagging(names);
+  const byName = new Map(infos.map(i => [i.name, i]));
+  for (const name of names) {
+    const info = byName.get(name);
+    if (!info) { result.errors.push({ order: name, error: 'Order not found in Shopify' }); continue; }
+    const plan = planOrderTag(info);
+    if (plan.action === 'skip') { result.skipped.push({ order: name, reason: plan.reason }); continue; }
+    try {
+      if (plan.remove) await shopify.tagsRemove(info.id, [plan.remove]);
+      await shopify.tagsAdd(info.id, [SUPPLIER_ORDER_TAG]);
+      result.tagged.push(name);
+    } catch (e) {
+      log(`Tagging ${name} failed: ${e.message}`);
+      result.errors.push({ order: name, error: e.message });
+    }
+  }
+  return result;
+}
+
 export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
   const { store, shopify, now = new Date() } = deps;
   const n = parseInt(lastSubmittedOrder, 10);
   if (!n) throw new Error('Pass the last submitted order number, e.g. 5990');
   const createdAt = await shopify.getOrderCreatedAt(n); // throws if the order does not exist
+
+  // Before changing anything: make sure we are actually allowed to tag orders, so a
+  // missing permission can never leave the cycle half-closed.
+  const tagging = !opts.skipTagging;
+  if (tagging) {
+    const scopes = await shopify.accessScopes();
+    if (!scopes.includes('write_orders')) {
+      throw new Error('The Shopify app is missing the write_orders scope, which is needed to tag orders ' +
+        `${SUPPLIER_ORDER_TAG}. Nothing was changed. Add write_orders (and approve it on the store), or run with --no-tag.`);
+    }
+  }
+  const ledger = readLedger(await store.readTab(LEDGER_TAB));
+  const tabRows = {};
+  for (const supplier of SUPPLIERS) tabRows[supplier] = (await store.readTab(supplier)).slice(1);
+  const plan = ordersToTag(ledger, tabRows, n);
+
+  // Copy what was ordered into "Order placed" BEFORE anything is cleared. If the
+  // copy fails or cannot be verified, we stop here and every tab is left as it was.
+  const meta = { lockDate: etDateString(now), lastOrder: n };
+  const archived = [];
+  for (const supplier of SUPPLIERS) archived.push(...archiveRows(supplier, (await store.readTab(supplier)).slice(1), meta));
+  if (archived.length) {
+    const before = (await store.readTab(ARCHIVE_TAB)).length;
+    await store.appendRows(ARCHIVE_TAB, archived);
+    const after = (await store.readTab(ARCHIVE_TAB)).length;
+    if (after - before !== archived.length) {
+      throw new Error(`"${ARCHIVE_TAB}" copy could not be verified (expected +${archived.length} rows, saw +${after - before}). Nothing was cleared.`);
+    }
+  }
+
+  // Tag now that the order record is safely copied. Failures here are reported, never fatal.
+  let tagResult = { skipped: [], tagged: [], errors: [] };
+  if (tagging) {
+    try { tagResult = await applyOrderTags(shopify, plan.tag, deps.log); }
+    catch (e) { tagResult = { tagged: [], skipped: [], errors: [{ order: '(all)', error: e.message }] }; }
+  }
+
   for (const supplier of SUPPLIERS) await store.clearBody(supplier);
   await store.clearBody(LEDGER_TAB);
   await writeConfig(store, {
@@ -160,7 +222,10 @@ export async function closeCycle(deps, lastSubmittedOrder, opts = {}) {
     [K.override]: '',
     [K.lastRun]: now.toISOString(),
   });
-  const result = { closed: true, lastSubmittedOrder: n, lastSubmittedOrderCreatedAt: createdAt };
+  const result = { closed: true, lastSubmittedOrder: n, lastSubmittedOrderCreatedAt: createdAt, rowsCopiedToOrderPlaced: archived.length };
+  result.tagging = tagging
+    ? { tag: SUPPLIER_ORDER_TAG, tagged: tagResult.tagged, skipped: tagResult.skipped, errors: tagResult.errors, heldBackBecauseSheetWasReducedByHand: plan.held }
+    : { skipped: 'tagging disabled (--no-tag)' };
   if (opts.runNow) result.run = await runAggregation({ ...deps, now }, { useNow: true });
   return result;
 }

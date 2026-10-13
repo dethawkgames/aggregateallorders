@@ -1,4 +1,4 @@
-import { TABS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, K } from '../src/config.js';
+import { TABS, CONFIG_TAB, LEDGER_TAB, LEDGER_HEADER, ARCHIVE_TAB, ARCHIVE_HEADER, K } from '../src/config.js';
 
 // In-memory stand-in for GoogleStore with identical semantics.
 export class MemoryStore {
@@ -6,6 +6,7 @@ export class MemoryStore {
     this.tabs = {};
     for (const [t, v] of Object.entries(TABS)) this.tabs[t] = [v.header.slice()];
     this.tabs[LEDGER_TAB] = [LEDGER_HEADER.slice()];
+    this.tabs[ARCHIVE_TAB] = [ARCHIVE_HEADER.slice()];
     this.tabs[CONFIG_TAB] = [['Setting', 'Value']];
   }
   async readTab(t) { return this.tabs[t].map(r => r.slice()); }
@@ -60,6 +61,22 @@ export class FakeShopify {
     if (!o) throw new Error(`Order #${num} not found in Shopify`);
     return o.createdAt;
   }
+  async accessScopes() { return this.scopes ?? ['read_orders', 'read_products', 'write_orders']; }
+  async getOrdersForTagging(names) {
+    return names.map(n => {
+      const o = this.orders.find(x => x.name === n);
+      if (!o) return null;
+      o.tagList ??= ['dhg-status-order-placed'];
+      return { id: `gid://shopify/Order/${n.slice(1)}`, name: o.name, createdAt: o.createdAt, cancelledAt: o.cancelledAt ?? null,
+        displayFulfillmentStatus: o.fulfillment ?? 'UNFULFILLED', tags: o.tagList.slice() };
+    }).filter(Boolean);
+  }
+  _byId(id) { return this.orders.find(o => `gid://shopify/Order/${o.name.slice(1)}` === id); }
+  async tagsAdd(id, t) {
+    if (this.failTagFor === id) throw new Error('tagsAdd boom');
+    const o = this._byId(id); o.tagList ??= []; for (const x of t) if (!o.tagList.includes(x)) o.tagList.push(x);
+  }
+  async tagsRemove(id, t) { const o = this._byId(id); o.tagList = (o.tagList ?? []).filter(x => !t.includes(x)); }
   async fetchOrders(since) { return this.orders.filter(o => o.createdAt >= since).map(o => JSON.parse(JSON.stringify(o))); }
   order(name) { return this.orders.find(o => o.name === name); }
 }

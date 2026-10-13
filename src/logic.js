@@ -1,5 +1,6 @@
 // Pure logic: no network, no sheet access. Everything here is unit-tested.
-import { SUPPLIER_TAGS, TABS } from './config.js';
+import { SUPPLIER_TAGS, TABS, EMAIL_LIFECYCLE_TAGS, INVENTORY_QUEUED_TAG, SUPPLIER_ORDER_TAG, TAGGING_FLOOR_DATE } from './config.js';
+import { etDateString } from './time.js';
 
 export function supplierForTags(tags) {
   const set = new Set((tags || []).map(t => String(t).toLowerCase().trim()));
@@ -133,4 +134,84 @@ export function binLookupBySku(bins) {
     }
   }
   return m;
+}
+
+// Rows for the "Order placed" archive from one supplier tab's body rows
+// (header excluded). Blank-SKU rows are skipped.
+export function archiveRows(supplier, rows, { lockDate, lastOrder }) {
+  const t = TABS[supplier];
+  const out = [];
+  for (const r of rows) {
+    const sku = String(r[t.skuCol] ?? '').trim();
+    if (!sku) continue;
+    out.push([
+      lockDate, lastOrder, supplier, sku,
+      supplier === 'ACDD' ? String(r[0] ?? '') : '',
+      Number(r[t.qtyCol]) || 0,
+      t.unitCol !== undefined ? String(r[t.unitCol] ?? '') : '',
+      String(r[t.titleCol] ?? ''), String(r[t.ordersCol] ?? ''), String(r[t.binsCol] ?? ''),
+    ]);
+  }
+  return out;
+}
+
+// Which orders count as "fully ordered" at close-cycle.
+//
+// Old rule (lock-supplier-order.py): tag an order only when EVERY unit it needs,
+// across every supplier, has been ordered. In this model a whole cycle is
+// submitted together, so an order is fully ordered when all of its counted lines
+// are on the sheets. The one exception is you changing the sheets by hand: if the
+// quantity left on a supplier tab for a SKU is LESS than what the ledger counted
+// (you pulled units from the bins, or deleted the row), we cannot tell which
+// orders those units belonged to, so every order containing that SKU is held back
+// and reported instead of being tagged. Orders with no live lines (fully
+// cancelled/refunded) are never tagged, the same guard the old code needed
+// against Python's all([]) being True.
+export function ordersToTag(ledger, tabRows, lastOrder) {
+  const sheetQty = new Map();
+  for (const supplier of Object.keys(TABS)) {
+    const t = TABS[supplier];
+    for (const r of tabRows[supplier] || []) {
+      const sku = String(r[t.skuCol] ?? '').trim();
+      if (!sku) continue;
+      const k = `${supplier}|${sku}`;
+      sheetQty.set(k, (sheetQty.get(k) || 0) + (Number(r[t.qtyCol]) || 0));
+    }
+  }
+  const ledgerQty = new Map();
+  for (const e of ledger.values()) {
+    if (e.qty <= 0) continue;
+    const k = `${e.supplier}|${e.sku}`;
+    ledgerQty.set(k, (ledgerQty.get(k) || 0) + e.qty);
+  }
+  const short = new Map();
+  for (const [k, q] of ledgerQty) if ((sheetQty.get(k) || 0) < q) short.set(k, { sheetQty: sheetQty.get(k) || 0, ledgerQty: q });
+
+  const candidates = new Set();
+  const held = [];
+  const heldOrders = new Set();
+  for (const e of ledger.values()) {
+    if (e.qty <= 0 || !(orderNumber(e.order) <= lastOrder)) continue;
+    candidates.add(e.order);
+    const sh = short.get(`${e.supplier}|${e.sku}`);
+    if (sh) { heldOrders.add(e.order); held.push({ order: e.order, sku: e.sku, supplier: e.supplier, ...sh }); }
+  }
+  const tag = [...candidates].filter(o => !heldOrders.has(o)).sort((a, b) => orderNumber(a) - orderNumber(b));
+  held.sort((a, b) => orderNumber(a.order) - orderNumber(b.order) || a.sku.localeCompare(b.sku));
+  return { tag, held };
+}
+
+// Decide what to do to one order, given its live Shopify state.
+export function planOrderTag(info) {
+  const tags = info.tags || [];
+  if (info.cancelledAt) return { action: 'skip', reason: 'cancelled' };
+  if (info.displayFulfillmentStatus === 'FULFILLED') return { action: 'skip', reason: 'already fulfilled' };
+  if (etDateString(new Date(info.createdAt)) < TAGGING_FLOOR_DATE) {
+    return { action: 'skip', reason: `placed before ${TAGGING_FLOOR_DATE}: handle manually` };
+  }
+  if (tags.includes(SUPPLIER_ORDER_TAG)) return { action: 'skip', reason: 'already tagged' };
+  // Only genuine fulfillment-stage tags count as the order's current status.
+  const current = tags.find(t => t.startsWith('dhg-status-') && !EMAIL_LIFECYCLE_TAGS.has(t));
+  if (current === INVENTORY_QUEUED_TAG) return { action: 'skip', reason: 'inventory-queued (never downgraded)' };
+  return { action: 'tag', remove: current || null };
 }

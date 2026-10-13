@@ -83,4 +83,35 @@ export class Shopify {
     }
     return out;
   }
+
+  async accessScopes() {
+    const d = await this.gql(`query { currentAppInstallation { accessScopes { handle } } }`);
+    return d.currentAppInstallation.accessScopes.map(x => x.handle);
+  }
+
+  // Live state for the orders we are about to tag.
+  async getOrdersForTagging(names) {
+    const out = [];
+    const nums = names.map(n => String(n).replace(/\D/g, ''));
+    for (let i = 0; i < nums.length; i += 40) {
+      const q = nums.slice(i, i + 40).map(n => `name:${n}`).join(' OR ');
+      const d = await this.gql(
+        `query($q: String!) { orders(first: 50, query: $q) { edges { node { id name createdAt cancelledAt displayFulfillmentStatus tags } } } }`,
+        { q });
+      for (const { node } of d.orders.edges) out.push(node);
+    }
+    return out;
+  }
+
+  async tagsAdd(id, tags) {
+    const d = await this.gql(
+      `mutation($id: ID!, $tags: [String!]!) { tagsAdd(id: $id, tags: $tags) { userErrors { field message } } }`, { id, tags });
+    if (d.tagsAdd.userErrors.length) throw new Error(JSON.stringify(d.tagsAdd.userErrors));
+  }
+
+  async tagsRemove(id, tags) {
+    const d = await this.gql(
+      `mutation($id: ID!, $tags: [String!]!) { tagsRemove(id: $id, tags: $tags) { userErrors { field message } } }`, { id, tags });
+    if (d.tagsRemove.userErrors.length) throw new Error(JSON.stringify(d.tagsRemove.userErrors));
+  }
 }

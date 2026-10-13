@@ -9,7 +9,7 @@ export const CUTOFF_HOUR = 6; // 6:00 am ET: every daily run, and submission day
 export const TABS = {
   Asmodee: {
     header: ['ProductId', 'Quantity', 'UnitOfMeasureId', 'VariantId', 'Title', 'Order Names', 'In Bins'],
-    skuCol: 0, qtyCol: 1, titleCol: 4, ordersCol: 5, binsCol: 6,
+    skuCol: 0, qtyCol: 1, unitCol: 2, titleCol: 4, ordersCol: 5, binsCol: 6,
   },
   'Universal Dist': {
     header: ['SKU', 'Quantity', 'Title', 'Order Names', 'In Bins'],
@@ -33,6 +33,12 @@ export const CONFIG_TAB = 'Config';
 export const LEDGER_TAB = 'Ledger';
 export const LEDGER_HEADER = ['Order', 'SKU', 'Supplier', 'Qty Counted', 'Title'];
 
+// "Order placed": permanent, append-only record of each locked cycle. Every row
+// carries its own lock date and last submitted order, so the list stays
+// filterable and later clean-up logic (e.g. dropping fulfilled items) can work row by row.
+export const ARCHIVE_TAB = 'Order placed';
+export const ARCHIVE_HEADER = ['Lock Date', 'Last Order Submitted', 'Supplier', 'SKU', 'ACDD SKU', 'Quantity', 'Unit', 'Title', 'Order Names', 'In Bins'];
+
 export const K = {
   lastOrder: 'Last Submitted Order',
   status: 'Cycle Status',
@@ -47,3 +53,17 @@ export const DEFAULTS = {
   productSkusSheetId: '1yC-oZ-0hD5ReTcOA9iTjTGC6mONbDUCpfbZZA9GrQtI', // read-only: ACDD SKU mapping lives on Sheet1
   shopifyApiVersion: '2025-01',
 };
+
+// ── Shopify order tagging at close-cycle (ported from the reconcile app's lock-supplier-order.py) ──
+export const SUPPLIER_ORDER_TAG = 'dhg-status-order-supplier';
+export const INVENTORY_QUEUED_TAG = 'dhg-status-inventory-queued';
+// Set once by the welcome-email system; NOT fulfillment-stage tags despite the
+// shared prefix. Tagging must never remove these.
+export const EMAIL_LIFECYCLE_TAGS = new Set([
+  'dhg-status-store-first-order',
+  'dhg-status-shop-first-order',
+  'dhg-status-order-placed',
+  'dhg-status-preorder',
+]);
+// Orders placed before this date are never pushed through the dhg-status tagging system.
+export const TAGGING_FLOOR_DATE = '2026-04-06';

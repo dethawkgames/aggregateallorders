@@ -11,6 +11,10 @@ on:
         description: 'Immediately pick up everything placed since (recommended)'
         type: boolean
         default: true
+      tag_orders:
+        description: 'Tag submitted Shopify orders dhg-status-order-supplier (needs write_orders)'
+        type: boolean
+        default: true
 
 concurrency:
   group: order-aggregation
@@ -34,4 +38,4 @@ jobs:
           SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-        run: node src/cli.js close-cycle "${{ inputs.last_order }}" ${{ inputs.run_now && '--run-now' || '' }}
+        run: node src/cli.js close-cycle "${{ inputs.last_order }}" ${{ inputs.run_now && '--run-now' || '' }} ${{ !inputs.tag_orders && '--no-tag' || '' }}
